@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VoxCPM2 Streaming Console</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">vLLM-Omni gateway</p>
+          <h1>VoxCPM2 Streaming Console</h1>
+        </div>
+        <div class="status-pill" id="serverStatus">Checking server</div>
+      </section>
+
+      <section class="workspace">
+        <form id="speechForm" class="panel controls">
+          <label>
+            Target text
+            <textarea name="input" rows="5" required>Hello from VoxCPM2 on vLLM-Omni. Streaming playback starts as soon as the first audio chunk arrives.</textarea>
+          </label>
+
+          <div class="grid two">
+            <label>
+              Model
+              <input name="model" id="modelInput" value="openbmb/VoxCPM2" />
+            </label>
+            <label>
+              Mode
+              <select name="mode" id="modeSelect">
+                <option value="voice_design">Voice design</option>
+                <option value="controllable_cloning">Controllable cloning</option>
+                <option value="ultimate_cloning">Ultimate cloning</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            Control instruction
+            <input name="control_instruction" placeholder="A warm young speaker, calm and expressive" />
+          </label>
+
+          <div class="grid two">
+            <label>
+              Voice
+              <input name="voice" value="default" />
+            </label>
+            <label>
+              Delivery
+              <select name="delivery" id="deliverySelect">
+                <option value="stream">Streaming playback</option>
+                <option value="file">Generate file</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              Response format
+              <select name="response_format" id="formatSelect">
+                <option value="pcm">PCM stream, 48 kHz int16</option>
+                <option value="wav">WAV file</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset>
+            <legend>Reference audio</legend>
+            <label>
+              Upload
+              <input type="file" name="ref_audio" accept="audio/*" />
+            </label>
+            <label>
+              URL or data URI
+              <input name="ref_audio_url" placeholder="https://example.com/reference.wav" />
+            </label>
+          </fieldset>
+
+          <fieldset id="ultimateFields" hidden>
+            <legend>Ultimate cloning continuation</legend>
+            <label>
+              Prompt audio upload
+              <input type="file" name="prompt_audio" accept="audio/*" />
+            </label>
+            <label>
+              Prompt audio URL or data URI
+              <input name="prompt_audio_url" />
+            </label>
+            <label>
+              Reference transcript
+              <textarea name="prompt_text" rows="3"></textarea>
+            </label>
+          </fieldset>
+
+          <details>
+            <summary>Advanced JSON payload overrides</summary>
+            <textarea name="extra_json" rows="4" placeholder='{"some_vllm_omni_field": "value"}'></textarea>
+          </details>
+
+          <div class="actions">
+            <button type="submit" id="generateBtn">Generate</button>
+            <button type="button" id="stopBtn" class="secondary">Stop</button>
+          </div>
+        </form>
+
+        <section class="panel output">
+          <div class="player-head">
+            <div>
+              <p class="eyebrow">Playback</p>
+              <h2 id="playbackState">Ready</h2>
+            </div>
+            <div class="dot" id="playbackDot"></div>
+          </div>
+
+          <div class="meter">
+            <span>TTFP</span>
+            <strong id="ttfp">-</strong>
+          </div>
+          <div class="meter">
+            <span>Chunks</span>
+            <strong id="chunks">0</strong>
+          </div>
+          <div class="meter">
+            <span>Audio</span>
+            <strong id="duration">0.0s</strong>
+          </div>
+          <div class="meter">
+            <span>RTF</span>
+            <strong id="rtf">-</strong>
+          </div>
+
+          <div class="progress">
+            <div id="progressBar"></div>
+          </div>
+
+          <audio id="fileAudio" controls hidden></audio>
+          <a id="downloadLink" class="download" hidden download="voxcpm2-output.wav">Download audio</a>
+
+          <pre id="log"></pre>
+        </section>
+      </section>
+    </main>
+    <script src="/static/player.js"></script>
+  </body>
+</html>

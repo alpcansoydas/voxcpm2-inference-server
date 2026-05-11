@@ -1,0 +1,22 @@
+[project]
+name = "voxcpm2-inference-server"
+version = "0.1.0"
+description = "FastAPI gateway and streaming demo UI for VoxCPM2 served by vLLM-Omni."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi==0.115.12",
+  "httpx==0.28.1",
+  "python-multipart==0.0.20",
+  "uvicorn[standard]==0.34.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.5",
+  "ruff==0.11.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

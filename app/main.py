@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+import base64
+import json
+import logging
+import mimetypes
+import os
+from pathlib import Path
+from typing import Any
+
+import httpx
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+logger = logging.getLogger("voxcpm2_gateway")
+
+APP_DIR = Path(__file__).resolve().parent
+STATIC_DIR = APP_DIR / "static"
+
+DEFAULT_VLLM_BASE_URL = os.getenv("VLLM_OMNI_BASE_URL", "http://localhost:8000")
+DEFAULT_MODEL = os.getenv("VOXCPM2_MODEL", "openbmb/VoxCPM2")
+DEFAULT_API_KEY = os.getenv("VLLM_OMNI_API_KEY", "EMPTY")
+
+
+class VllmOmniClient:
+    def __init__(self, base_url: str, api_key: str) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+
+    @property
+    def speech_url(self) -> str:
+        return f"{self.base_url}/v1/audio/speech"
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+    async def request_speech(self, payload: dict[str, Any], *, stream: bool) -> httpx.Response:
+        client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=20.0))
+        request = client.build_request(
+            "POST",
+            self.speech_url,
+            json=payload,
+            headers=self.headers,
+        )
+        try:
+            response = await client.send(request, stream=stream)
+        except Exception:
+            await client.aclose()
+            raise
+        response.extensions["client"] = client
+        return response
+
+
+client = VllmOmniClient(DEFAULT_VLLM_BASE_URL, DEFAULT_API_KEY)
+app = FastAPI(
+    title="VoxCPM2 Inference Gateway",
+    description="FastAPI service and streaming demo for VoxCPM2 served by vLLM-Omni.",
+    version="0.1.0",
+)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/config")
+async def config() -> dict[str, str | int]:
+    return {
+        "vllm_base_url": client.base_url,
+        "default_model": DEFAULT_MODEL,
+        "sample_rate": 48000,
+    }
+
+
+@app.get("/api/health")
+async def health() -> dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            response = await http.get(f"{client.base_url}/health")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "gateway": "ok",
+            "vllm_base_url": client.base_url,
+            "vllm_error": str(exc),
+        }
+    return {
+        "ok": response.status_code < 500,
+        "gateway": "ok",
+        "vllm_base_url": client.base_url,
+        "vllm_status_code": response.status_code,
+    }
+
+
+@app.post("/api/speech")
+async def speech_json(request: Request) -> Response:
+    payload = await request.json()
+    payload.setdefault("model", DEFAULT_MODEL)
+    response_format = str(payload.get("response_format") or "wav")
+    payload["stream"] = False
+    payload["response_format"] = response_format
+    return await _forward_non_streaming(payload, _media_type_for_format(response_format))
+
+
+@app.post("/api/speech/stream")
+async def speech_stream_form(
+    input: str = Form(...),
+    model: str = Form(DEFAULT_MODEL),
+    mode: str = Form("voice_design"),
+    voice: str = Form("default"),
+    control_instruction: str = Form(""),
+    response_format: str = Form("pcm"),
+    ref_audio_url: str = Form(""),
+    prompt_audio_url: str = Form(""),
+    prompt_text: str = Form(""),
+    extra_json: str = Form(""),
+    ref_audio: UploadFile | None = File(None),
+    prompt_audio: UploadFile | None = File(None),
+) -> StreamingResponse:
+    payload = await _build_payload_from_form(
+        input_text=input,
+        model=model,
+        mode=mode,
+        voice=voice,
+        control_instruction=control_instruction,
+        response_format=response_format,
+        stream=True,
+        ref_audio_url=ref_audio_url,
+        prompt_audio_url=prompt_audio_url,
+        prompt_text=prompt_text,
+        extra_json=extra_json,
+        ref_audio=ref_audio,
+        prompt_audio=prompt_audio,
+    )
+    return await _forward_streaming(payload, _media_type_for_format(response_format))
+
+
+@app.post("/api/speech/file")
+async def speech_file_form(
+    input: str = Form(...),
+    model: str = Form(DEFAULT_MODEL),
+    mode: str = Form("voice_design"),
+    voice: str = Form("default"),
+    control_instruction: str = Form(""),
+    response_format: str = Form("wav"),
+    ref_audio_url: str = Form(""),
+    prompt_audio_url: str = Form(""),
+    prompt_text: str = Form(""),
+    extra_json: str = Form(""),
+    ref_audio: UploadFile | None = File(None),
+    prompt_audio: UploadFile | None = File(None),
+) -> Response:
+    payload = await _build_payload_from_form(
+        input_text=input,
+        model=model,
+        mode=mode,
+        voice=voice,
+        control_instruction=control_instruction,
+        response_format=response_format,
+        stream=False,
+        ref_audio_url=ref_audio_url,
+        prompt_audio_url=prompt_audio_url,
+        prompt_text=prompt_text,
+        extra_json=extra_json,
+        ref_audio=ref_audio,
+        prompt_audio=prompt_audio,
+    )
+    return await _forward_non_streaming(payload, _media_type_for_format(response_format))
+
+
+async def _build_payload_from_form(
+    *,
+    input_text: str,
+    model: str,
+    mode: str,
+    voice: str,
+    control_instruction: str,
+    response_format: str,
+    stream: bool,
+    ref_audio_url: str,
+    prompt_audio_url: str,
+    prompt_text: str,
+    extra_json: str,
+    ref_audio: UploadFile | None,
+    prompt_audio: UploadFile | None,
+) -> dict[str, Any]:
+    text = input_text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="input text is required")
+
+    mode = mode.strip() or "voice_design"
+    control = control_instruction.strip()
+    final_text = f"({control}){text}" if control and mode != "ultimate_cloning" else text
+
+    payload: dict[str, Any] = {
+        "model": model.strip() or DEFAULT_MODEL,
+        "input": final_text,
+        "voice": voice.strip() or "default",
+        "response_format": response_format.strip() or ("pcm" if stream else "wav"),
+        "stream": stream,
+    }
+
+    ref_audio_value = ref_audio_url.strip()
+    if not ref_audio_value and ref_audio is not None and ref_audio.filename:
+        ref_audio_value = await _upload_to_data_uri(ref_audio)
+    if ref_audio_value:
+        payload["ref_audio"] = ref_audio_value
+
+    if mode == "ultimate_cloning":
+        prompt_audio_value = prompt_audio_url.strip()
+        if not prompt_audio_value and prompt_audio is not None and prompt_audio.filename:
+            prompt_audio_value = await _upload_to_data_uri(prompt_audio)
+        if not prompt_audio_value:
+            prompt_audio_value = ref_audio_value
+        if prompt_audio_value:
+            payload["prompt_audio"] = prompt_audio_value
+        if prompt_text.strip():
+            payload["prompt_text"] = prompt_text.strip()
+
+    if extra_json.strip():
+        try:
+            extra = json.loads(extra_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"extra_json is invalid JSON: {exc}") from exc
+        if not isinstance(extra, dict):
+            raise HTTPException(status_code=400, detail="extra_json must be a JSON object")
+        payload.update(extra)
+        payload["stream"] = stream
+        payload.setdefault("response_format", response_format)
+
+    return payload
+
+
+async def _upload_to_data_uri(upload: UploadFile) -> str:
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail=f"{upload.filename or 'audio upload'} is empty")
+    content_type = upload.content_type
+    if not content_type or content_type == "application/octet-stream":
+        guessed, _ = mimetypes.guess_type(upload.filename or "")
+        content_type = guessed or "audio/wav"
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
+
+
+async def _forward_streaming(payload: dict[str, Any], media_type: str) -> StreamingResponse:
+    try:
+        response = await client.request_speech(payload, stream=True)
+    except Exception as exc:
+        logger.exception("vLLM-Omni streaming request failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    owning_client: httpx.AsyncClient = response.extensions["client"]
+    if response.status_code >= 400:
+        content = await response.aread()
+        await response.aclose()
+        await owning_client.aclose()
+        raise HTTPException(status_code=response.status_code, detail=content.decode(errors="replace"))
+
+    async def relay():
+        try:
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
+        finally:
+            await response.aclose()
+            await owning_client.aclose()
+
+    return StreamingResponse(relay(), media_type=media_type)
+
+
+async def _forward_non_streaming(payload: dict[str, Any], media_type: str) -> Response:
+    try:
+        response = await client.request_speech(payload, stream=False)
+    except Exception as exc:
+        logger.exception("vLLM-Omni speech request failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    owning_client: httpx.AsyncClient = response.extensions["client"]
+    try:
+        content = await response.aread()
+    finally:
+        await response.aclose()
+        await owning_client.aclose()
+
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=content.decode(errors="replace"))
+    return Response(content=content, media_type=media_type)
+
+
+def _media_type_for_format(response_format: str) -> str:
+    normalized = response_format.lower().strip()
+    if normalized == "pcm":
+        return "audio/L16;rate=48000;channels=1"
+    if normalized == "mp3":
+        return "audio/mpeg"
+    if normalized == "flac":
+        return "audio/flac"
+    return "audio/wav"
+
