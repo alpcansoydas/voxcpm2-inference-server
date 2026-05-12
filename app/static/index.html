@@ -54,6 +54,37 @@
             </label>
             <fieldset>
               <legend>Reference audio</legend>
+              <div class="preset-picker">
+                <div class="grid two">
+                  <label>
+                    Preset language
+                    <select data-preset-language>
+                      <option value="">Upload or URL</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preset voice
+                    <select data-preset-voice disabled>
+                      <option value="">Select voice</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preset sample
+                    <select data-preset-sample disabled>
+                      <option value="">Select sample</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preset format
+                    <select name="preset_format" data-preset-format disabled>
+                      <option value="wav">WAV reference</option>
+                      <option value="mp3">MP3 reference</option>
+                    </select>
+                  </label>
+                </div>
+                <input type="hidden" name="preset_voice" data-preset-value />
+                <audio data-preset-preview controls hidden></audio>
+              </div>
               <label>
                 Upload
                 <input type="file" name="ref_audio" accept="audio/*" />
@@ -73,6 +104,37 @@
             </label>
             <fieldset>
               <legend>Reference audio</legend>
+              <div class="preset-picker">
+                <div class="grid two">
+                  <label>
+                    Preset language
+                    <select data-preset-language disabled>
+                      <option value="">Upload or URL</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preset voice
+                    <select data-preset-voice disabled>
+                      <option value="">Select voice</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preset sample
+                    <select data-preset-sample disabled>
+                      <option value="">Select sample</option>
+                    </select>
+                  </label>
+                  <label>
+                    Preset format
+                    <select name="preset_format" data-preset-format disabled>
+                      <option value="wav">WAV reference</option>
+                      <option value="mp3">MP3 reference</option>
+                    </select>
+                  </label>
+                </div>
+                <input type="hidden" name="preset_voice" data-preset-value disabled />
+                <audio data-preset-preview controls hidden></audio>
+              </div>
               <label>
                 Upload
                 <input type="file" name="ref_audio" accept="audio/*" disabled />
@@ -206,6 +268,6 @@
         </section>
       </section>
     </main>
-    <script src="/static/player.js?v=20260512-1210"></script>
+    <script src="/static/player.js?v=20260512-voice-presets"></script>
   </body>
 </html>

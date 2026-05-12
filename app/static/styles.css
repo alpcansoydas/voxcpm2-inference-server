@@ -159,6 +159,11 @@ fieldset {
   background: #fbfcfc;
 }
 
+.preset-picker {
+  display: grid;
+  gap: 10px;
+}
+
 legend,
 summary {
   color: var(--ink);
@@ -311,6 +316,10 @@ button:disabled {
 }
 
 #fileAudio {
+  width: 100%;
+}
+
+[data-preset-preview] {
   width: 100%;
 }
 

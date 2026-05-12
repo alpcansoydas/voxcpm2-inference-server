@@ -59,6 +59,7 @@ const generateBtn = document.getElementById("generateBtn");
 const logEl = document.getElementById("log");
 const fileAudio = document.getElementById("fileAudio");
 const downloadLink = document.getElementById("downloadLink");
+const presetPickers = Array.from(document.querySelectorAll(".preset-picker"));
 
 let audioContext;
 let playbackNode;
@@ -70,6 +71,7 @@ let abortController;
 let objectUrl;
 let stats = resetStats();
 let streamedChunks = [];
+let presetLanguages = [];
 
 function resetStats() {
   return {
@@ -350,7 +352,7 @@ function forceActiveFields(formData) {
   formData.delete("control_instruction");
   if (control && !control.disabled) formData.set("control_instruction", control.value);
 
-  ["ref_audio", "ref_audio_url", "prompt_audio", "prompt_audio_url", "prompt_text"].forEach((name) => {
+  ["preset_voice", "preset_format", "ref_audio", "ref_audio_url", "prompt_audio", "prompt_audio_url", "prompt_text"].forEach((name) => {
     formData.delete(name);
     const field = activePanel.querySelector(`[name='${name}']`);
     if (field && !field.disabled) {
@@ -415,6 +417,9 @@ function setMode(mode) {
     panel.querySelectorAll("input, textarea, select").forEach((field) => {
       field.disabled = !active;
     });
+    if (active) {
+      panel.querySelectorAll(".preset-picker").forEach(syncPresetPickerState);
+    }
   });
   clearPlayback();
   setPlaybackState("Ready", "#a6adb1");
@@ -427,6 +432,102 @@ deliverySelect.addEventListener("change", () => {
 modeTabs.forEach((tab) => {
   tab.addEventListener("click", () => setMode(tab.dataset.mode));
 });
+
+function setSelectOptions(select, items, placeholder, valueField = "id") {
+  select.innerHTML = "";
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = placeholder;
+  select.appendChild(empty);
+  items.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item[valueField];
+    option.textContent = item.label;
+    select.appendChild(option);
+  });
+}
+
+function findPresetSelection(picker) {
+  const languageSelect = picker.querySelector("[data-preset-language]");
+  const voiceSelect = picker.querySelector("[data-preset-voice]");
+  const sampleSelect = picker.querySelector("[data-preset-sample]");
+  const language = presetLanguages.find((item) => item.code === languageSelect.value);
+  const voice = language ? language.voices.find((item) => item.id === voiceSelect.value) : undefined;
+  const sample = voice ? voice.samples.find((item) => item.id === sampleSelect.value) : undefined;
+  return { language, voice, sample };
+}
+
+function updatePresetPreview(picker) {
+  const formatSelect = picker.querySelector("[data-preset-format]");
+  const presetValue = picker.querySelector("[data-preset-value]");
+  const preview = picker.querySelector("[data-preset-preview]");
+  const { sample } = findPresetSelection(picker);
+
+  presetValue.value = sample ? sample.id : "";
+  formatSelect.disabled = !sample;
+  preview.hidden = !sample;
+  if (!sample) {
+    preview.removeAttribute("src");
+    return;
+  }
+
+  if (!sample.formats[formatSelect.value]) {
+    formatSelect.value = sample.formats.mp3 ? "mp3" : "wav";
+  }
+  preview.src = sample.formats[formatSelect.value];
+}
+
+function syncPresetPickerState(picker) {
+  const voiceSelect = picker.querySelector("[data-preset-voice]");
+  const sampleSelect = picker.querySelector("[data-preset-sample]");
+  const { language, voice } = findPresetSelection(picker);
+  voiceSelect.disabled = !language;
+  sampleSelect.disabled = !voice;
+  updatePresetPreview(picker);
+}
+
+function populateSamples(picker) {
+  const sampleSelect = picker.querySelector("[data-preset-sample]");
+  const { voice } = findPresetSelection(picker);
+  setSelectOptions(sampleSelect, voice ? voice.samples : [], "Select sample");
+  sampleSelect.disabled = !voice;
+  if (voice && voice.samples.length > 0) sampleSelect.value = voice.samples[0].id;
+  updatePresetPreview(picker);
+}
+
+function populateVoices(picker) {
+  const voiceSelect = picker.querySelector("[data-preset-voice]");
+  const { language } = findPresetSelection(picker);
+  setSelectOptions(voiceSelect, language ? language.voices : [], "Select voice");
+  voiceSelect.disabled = !language;
+  if (language && language.voices.length > 0) voiceSelect.value = language.voices[0].id;
+  populateSamples(picker);
+}
+
+function setupPresetPicker(picker) {
+  const languageSelect = picker.querySelector("[data-preset-language]");
+  const voiceSelect = picker.querySelector("[data-preset-voice]");
+  const sampleSelect = picker.querySelector("[data-preset-sample]");
+  const formatSelect = picker.querySelector("[data-preset-format]");
+
+  setSelectOptions(languageSelect, presetLanguages, "Upload or URL", "code");
+  languageSelect.addEventListener("change", () => populateVoices(picker));
+  voiceSelect.addEventListener("change", () => populateSamples(picker));
+  sampleSelect.addEventListener("change", () => updatePresetPreview(picker));
+  formatSelect.addEventListener("change", () => updatePresetPreview(picker));
+}
+
+async function loadVoicePresets() {
+  try {
+    const response = await fetch("/api/voice-presets");
+    if (!response.ok) throw new Error(await response.text());
+    const payload = await response.json();
+    presetLanguages = payload.languages || [];
+    presetPickers.forEach(setupPresetPicker);
+  } catch (error) {
+    log(`Voice presets unavailable: ${error.message || String(error)}`);
+  }
+}
 
 async function loadConfig() {
   try {
@@ -451,4 +552,5 @@ async function loadConfig() {
 }
 
 setMode(modeInput.value);
+loadVoicePresets();
 loadConfig();

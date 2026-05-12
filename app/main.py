@@ -17,6 +17,8 @@ logger = logging.getLogger("voxcpm2_gateway")
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
+ROOT_DIR = APP_DIR.parent
+VOICE_PRESETS_DIR = ROOT_DIR / "voice_presets"
 
 DEFAULT_VLLM_BASE_URL = os.getenv("VLLM_OMNI_BASE_URL", "http://localhost:8000")
 DEFAULT_MODEL = os.getenv("VOXCPM2_MODEL", "openbmb/VoxCPM2")
@@ -64,6 +66,7 @@ app = FastAPI(
     version="0.1.0",
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/voice_presets", StaticFiles(directory=VOICE_PRESETS_DIR), name="voice_presets")
 
 
 @app.get("/")
@@ -78,6 +81,59 @@ async def config() -> dict[str, str | int]:
         "default_model": DEFAULT_MODEL,
         "default_voice": DEFAULT_VOICE,
         "sample_rate": 48000,
+    }
+
+
+@app.get("/api/voice-presets")
+async def voice_presets() -> dict[str, Any]:
+    languages: dict[str, dict[str, Any]] = {}
+    if not VOICE_PRESETS_DIR.exists():
+        return {"languages": []}
+
+    for wav_path in sorted(VOICE_PRESETS_DIR.glob("*/*/*.wav")):
+        relative = wav_path.relative_to(VOICE_PRESETS_DIR)
+        if "expressions" in relative.parts:
+            continue
+        mp3_path = wav_path.with_suffix(".mp3")
+        language_code, voice_id = relative.parts[0], relative.parts[1]
+        preset_id = str(relative.with_suffix("")).replace(os.sep, "/")
+        language = languages.setdefault(
+            language_code,
+            {
+                "code": language_code,
+                "label": _language_label(language_code),
+                "voices": {},
+            },
+        )
+        voice = language["voices"].setdefault(
+            voice_id,
+            {
+                "id": f"{language_code}/{voice_id}",
+                "label": _human_label(voice_id),
+                "samples": [],
+            },
+        )
+        formats = {
+            "wav": f"/voice_presets/{relative.as_posix()}",
+        }
+        if mp3_path.exists():
+            formats["mp3"] = f"/voice_presets/{relative.with_suffix('.mp3').as_posix()}"
+        voice["samples"].append(
+            {
+                "id": preset_id,
+                "label": _sample_label(wav_path.stem),
+                "formats": formats,
+            }
+        )
+
+    return {
+        "languages": [
+            {
+                **language,
+                "voices": sorted(language["voices"].values(), key=lambda item: item["label"]),
+            }
+            for language in sorted(languages.values(), key=lambda item: item["label"])
+        ]
     }
 
 
@@ -121,6 +177,8 @@ async def speech_stream_form(
     control_instruction: str = Form(""),
     response_format: str = Form("pcm"),
     ref_audio_url: str = Form(""),
+    preset_voice: str = Form(""),
+    preset_format: str = Form("wav"),
     prompt_audio_url: str = Form(""),
     prompt_text: str = Form(""),
     cfg_value: str = Form("2.0"),
@@ -145,6 +203,8 @@ async def speech_stream_form(
         response_format=response_format,
         stream=True,
         ref_audio_url=ref_audio_url,
+        preset_voice=preset_voice,
+        preset_format=preset_format,
         prompt_audio_url=prompt_audio_url,
         prompt_text=prompt_text,
         cfg_value=cfg_value,
@@ -172,6 +232,8 @@ async def speech_file_form(
     control_instruction: str = Form(""),
     response_format: str = Form("wav"),
     ref_audio_url: str = Form(""),
+    preset_voice: str = Form(""),
+    preset_format: str = Form("wav"),
     prompt_audio_url: str = Form(""),
     prompt_text: str = Form(""),
     cfg_value: str = Form("2.0"),
@@ -196,6 +258,8 @@ async def speech_file_form(
         response_format=response_format,
         stream=False,
         ref_audio_url=ref_audio_url,
+        preset_voice=preset_voice,
+        preset_format=preset_format,
         prompt_audio_url=prompt_audio_url,
         prompt_text=prompt_text,
         cfg_value=cfg_value,
@@ -224,6 +288,8 @@ async def _build_payload_from_form(
     response_format: str,
     stream: bool,
     ref_audio_url: str,
+    preset_voice: str,
+    preset_format: str,
     prompt_audio_url: str,
     prompt_text: str,
     cfg_value: str,
@@ -257,7 +323,11 @@ async def _build_payload_from_form(
     if normalized_voice:
         payload["voice"] = normalized_voice
 
-    ref_audio_value = ref_audio_url.strip()
+    ref_audio_value = ""
+    if preset_voice.strip():
+        ref_audio_value = _preset_to_data_uri(preset_voice, preset_format)
+    if not ref_audio_value:
+        ref_audio_value = ref_audio_url.strip()
     if not ref_audio_value and ref_audio is not None and ref_audio.filename:
         ref_audio_value = await _upload_to_data_uri(ref_audio)
     if ref_audio_value:
@@ -380,6 +450,60 @@ def _normalize_voice(payload: dict[str, Any]) -> None:
         payload["voice"] = voice
     else:
         payload.pop("voice", None)
+
+
+def _preset_to_data_uri(preset_voice: str, preset_format: str) -> str:
+    normalized_format = preset_format.lower().strip() or "wav"
+    if normalized_format not in {"wav", "mp3"}:
+        raise HTTPException(status_code=400, detail="preset_format must be wav or mp3")
+
+    preset_id = preset_voice.strip().replace("\\", "/")
+    if not preset_id:
+        return ""
+    if preset_id.endswith((".wav", ".mp3")):
+        preset_id = str(Path(preset_id).with_suffix(""))
+
+    candidate = (VOICE_PRESETS_DIR / f"{preset_id}.{normalized_format}").resolve()
+    try:
+        candidate.relative_to(VOICE_PRESETS_DIR.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="preset_voice is invalid") from exc
+    if not candidate.is_file():
+        raise HTTPException(status_code=400, detail=f"preset voice not found: {preset_voice}.{normalized_format}")
+
+    content_type = "audio/mpeg" if normalized_format == "mp3" else "audio/wav"
+    encoded = base64.b64encode(candidate.read_bytes()).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
+
+
+def _language_label(code: str) -> str:
+    labels = {
+        "ar": "Arabic",
+        "de": "German",
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "hu": "Hungarian",
+        "it": "Italian",
+        "ja": "Japanese",
+        "pl": "Polish",
+        "pt": "Portuguese",
+        "ru": "Russian",
+        "tr": "Turkish",
+        "zh": "Chinese",
+    }
+    return labels.get(code, code.upper())
+
+
+def _human_label(value: str) -> str:
+    return value.replace("_", " ").strip().title()
+
+
+def _sample_label(stem: str) -> str:
+    parts = stem.split("_")
+    if parts and len(parts[-1]) > 1:
+        return _human_label(parts[-1])
+    return _human_label(stem)
 
 
 async def _upload_to_data_uri(upload: UploadFile) -> str:
