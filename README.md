@@ -7,6 +7,48 @@ The gateway keeps model execution in vLLM-Omni and exposes a small app-owned API
 for voice design, controllable voice cloning, ultimate cloning, non-streaming WAV
 generation, and raw PCM streaming playback.
 
+## Quick Start
+
+From a fresh clone, start the lightweight FastAPI gateway first:
+
+```bash
+git clone <your-github-repo-url>
+cd voxcpm2-inference-server
+uv venv .venv
+uv pip install --python .venv/bin/python -e .
+VLLM_OMNI_BASE_URL=http://localhost:8000 \
+VOXCPM2_MODEL=openbmb/VoxCPM2 \
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
+Open the demo at:
+
+```text
+http://localhost:8080
+```
+
+The gateway can start before the GPU inference server is running. In that case
+`/api/health` returns `"gateway": "ok"` and reports the vLLM connection error;
+audio generation starts working after the vLLM-Omni server is available at
+`VLLM_OMNI_BASE_URL`.
+
+If port `8080` is already in use, change the gateway port:
+
+```bash
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8081
+```
+
+If you prefer standard `venv` and `pip`:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+VLLM_OMNI_BASE_URL=http://localhost:8000 \
+VOXCPM2_MODEL=openbmb/VoxCPM2 \
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+```
+
 ## Start Both Servers
 
 This project runs as two separate services:
@@ -53,12 +95,12 @@ the browser as they arrive.
 
 ### 2. Start this FastAPI gateway and demo
 
-Install this service:
+Install this service. The explicit `--python` form avoids accidentally
+installing into a previously active virtual environment:
 
 ```bash
 uv venv
-source .venv/bin/activate
-uv pip install -e .
+uv pip install --python .venv/bin/python -e .
 ```
 
 Or with pip:
@@ -66,7 +108,7 @@ Or with pip:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Run it:
@@ -74,7 +116,7 @@ Run it:
 ```bash
 VLLM_OMNI_BASE_URL=http://localhost:8000 \
 VOXCPM2_MODEL=openbmb/VoxCPM2 \
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 Open the demo at:
