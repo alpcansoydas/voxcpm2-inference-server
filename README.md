@@ -59,35 +59,56 @@ This project runs as two separate services:
 ### 1. Start vLLM-Omni
 
 Install and run vLLM-Omni in the GPU environment. This is separate from the
-lightweight gateway requirements in `requirements.txt`.
+lightweight gateway requirements in `requirements.txt`. Use Python 3.12 for
+the vLLM-Omni environment.
 
 ```bash
-uv pip install -r requirements-vllm-omni.txt --torch-backend=auto
-git clone https://github.com/vllm-project/vllm-omni.git
-cd vllm-omni
-uv pip install -e . --no-build-isolation
+uv venv .venv-vllm --python 3.12 --seed
+uv pip install --python .venv-vllm/bin/python -r requirements-vllm-omni.txt --torch-backend=auto
+env SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VOXCPM=2.0.0 \
+  uv pip install --python .venv-vllm/bin/python -e ./VoxCPM-main --index-strategy unsafe-best-match
 hash -r
 ```
 
-Check that vLLM-Omni imports cleanly and that the `--omni` CLI flag is
-registered before starting the server:
+If your `nvidia-smi` reports driver 550 / CUDA 12.6, the plain `vllm==0.20.0`
+PyPI wheel fails with `ImportError: libcudart.so.13`. Reinstall vLLM with the
+official CUDA 12.9 wheel:
 
 ```bash
-python -m pip show vllm vllm-omni
-python -c "import vllm_omni; print('vllm-omni ok')"
-vllm serve --help | grep omni
+uv pip install --python .venv-vllm/bin/python --reinstall \
+  'https://github.com/vllm-project/vllm/releases/download/v0.20.0/vllm-0.20.0%2Bcu129-cp38-abi3-manylinux_2_31_x86_64.whl' \
+  --extra-index-url https://download.pytorch.org/whl/cu129 \
+  --index-strategy unsafe-best-match
+```
+
+Check that vLLM-Omni imports cleanly and that the Omni CLI exposes
+`OmniConfig`:
+
+```bash
+.venv-vllm/bin/python -m pip show vllm vllm-omni voxcpm
+.venv-vllm/bin/python -c "import vllm_omni; print('vllm-omni ok')"
+.venv-vllm/bin/vllm-omni serve openbmb/VoxCPM2 --omni --help=OmniConfig
 ```
 
 Then launch the OpenAI-compatible VoxCPM2 speech server:
 
 ```bash
-vllm serve openbmb/VoxCPM2 --omni --host 0.0.0.0 --port 8000
+VLLM_OMNI_VOXCPM_CODE_PATH="$PWD/VoxCPM-main/src" \
+.venv-vllm/bin/vllm-omni serve openbmb/VoxCPM2 --omni --host 0.0.0.0 --port 8000
 ```
 
-If `--omni` is unrecognized, or importing `vllm_omni` warns about mismatched
-versions, reinstall vLLM and vLLM-Omni in the same active Python environment.
-For example, a `vllm-omni 0.20.x` checkout needs `vllm 0.20.x`; pairing it with
-`vllm 0.19.x` can fail with missing vLLM internal symbols.
+In vLLM-Omni 0.20.0, the installed `vllm-omni` command is the reliable entry
+point for Omni serving. If you run plain `vllm serve ... --omni` and get an
+unrecognized-argument error, use the `vllm-omni serve ... --omni` command above.
+If importing `vllm_omni` warns about mismatched versions, reinstall vLLM and
+vLLM-Omni in the same active Python environment. A `vllm-omni 0.20.x` checkout
+needs `vllm 0.20.x`; pairing it with `vllm 0.19.x` can fail with missing vLLM
+internal symbols.
+
+The local VoxCPM install uses `SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VOXCPM`
+because the bundled `VoxCPM-main` directory does not include its own `.git`
+metadata. Without the local install, startup can fail with imports such as
+`No module named 'voxcpm'` or `No module named 'librosa'`.
 
 VoxCPM2 serving is OpenAI-compatible through `/v1/audio/speech`. For streaming,
 the gateway sends `stream=true` and `response_format=pcm`, then relays chunks to

@@ -1,6 +1,15 @@
 # GPU inference server dependencies for the separate vLLM-Omni process.
 #
-# Keep vLLM and vLLM-Omni on the same major/minor line. A newer vLLM-Omni
-# checkout can fail at import time against older vLLM internals, and then
-# `vllm serve --omni` will not be registered.
+# Keep vLLM and vLLM-Omni on the same major/minor line.
+#
+# vLLM 0.20.0's normal PyPI wheel is CUDA 13.0. On hosts with a pre-CUDA-13
+# driver, such as NVIDIA driver 550 / CUDA 12.6, install the official CUDA 12.9
+# wheel instead; see README.md for the exact command. Leaving plain vllm here
+# is intentional for CUDA 13-capable systems.
 vllm==0.20.0
+
+# vLLM-Omni 0.20.0 is needed for VoxCPM2 native AR serving. It is installed
+# from the matching release tag because the PyPI stable wheel may lag the
+# latest supported models.
+setuptools_scm
+vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@v0.20.0
