@@ -16,16 +16,36 @@ This project runs as two separate services:
 
 ### 1. Start vLLM-Omni
 
-Install and run vLLM-Omni in the GPU environment:
+Install and run vLLM-Omni in the GPU environment. This is separate from the
+lightweight gateway requirements in `requirements.txt`.
 
 ```bash
-uv pip install vllm==0.19.0 --torch-backend=auto
+uv pip install -r requirements-vllm-omni.txt --torch-backend=auto
 git clone https://github.com/vllm-project/vllm-omni.git
 cd vllm-omni
-uv pip install -e .
+uv pip install -e . --no-build-isolation
+hash -r
+```
 
+Check that vLLM-Omni imports cleanly and that the `--omni` CLI flag is
+registered before starting the server:
+
+```bash
+python -m pip show vllm vllm-omni
+python -c "import vllm_omni; print('vllm-omni ok')"
+vllm serve --help | grep omni
+```
+
+Then launch the OpenAI-compatible VoxCPM2 speech server:
+
+```bash
 vllm serve openbmb/VoxCPM2 --omni --host 0.0.0.0 --port 8000
 ```
+
+If `--omni` is unrecognized, or importing `vllm_omni` warns about mismatched
+versions, reinstall vLLM and vLLM-Omni in the same active Python environment.
+For example, a `vllm-omni 0.20.x` checkout needs `vllm 0.20.x`; pairing it with
+`vllm 0.19.x` can fail with missing vLLM internal symbols.
 
 VoxCPM2 serving is OpenAI-compatible through `/v1/audio/speech`. For streaming,
 the gateway sends `stream=true` and `response_format=pcm`, then relays chunks to

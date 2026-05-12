@@ -1,0 +1,6 @@
+# GPU inference server dependencies for the separate vLLM-Omni process.
+#
+# Keep vLLM and vLLM-Omni on the same major/minor line. A newer vLLM-Omni
+# checkout can fail at import time against older vLLM internals, and then
+# `vllm serve --omni` will not be registered.
+vllm==0.20.0

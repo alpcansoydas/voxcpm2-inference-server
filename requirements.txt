@@ -1,3 +1,5 @@
+# FastAPI gateway dependencies only. The separate GPU vLLM-Omni server uses
+# requirements-vllm-omni.txt.
 fastapi==0.115.12
 httpx==0.28.1
 python-multipart==0.0.20
