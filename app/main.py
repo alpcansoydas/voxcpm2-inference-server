@@ -21,6 +21,7 @@ STATIC_DIR = APP_DIR / "static"
 DEFAULT_VLLM_BASE_URL = os.getenv("VLLM_OMNI_BASE_URL", "http://localhost:8000")
 DEFAULT_MODEL = os.getenv("VOXCPM2_MODEL", "openbmb/VoxCPM2")
 DEFAULT_API_KEY = os.getenv("VLLM_OMNI_API_KEY", "EMPTY")
+DEFAULT_VOICE = os.getenv("VOXCPM2_VOICE", "")
 
 
 class VllmOmniClient:
@@ -75,6 +76,7 @@ async def config() -> dict[str, str | int]:
     return {
         "vllm_base_url": client.base_url,
         "default_model": DEFAULT_MODEL,
+        "default_voice": DEFAULT_VOICE,
         "sample_rate": 48000,
     }
 
@@ -103,6 +105,7 @@ async def health() -> dict[str, Any]:
 async def speech_json(request: Request) -> Response:
     payload = await request.json()
     payload.setdefault("model", DEFAULT_MODEL)
+    _normalize_voice(payload)
     response_format = str(payload.get("response_format") or "wav")
     payload["stream"] = False
     payload["response_format"] = response_format
@@ -114,12 +117,21 @@ async def speech_stream_form(
     input: str = Form(...),
     model: str = Form(DEFAULT_MODEL),
     mode: str = Form("voice_design"),
-    voice: str = Form("default"),
+    voice: str = Form(DEFAULT_VOICE),
     control_instruction: str = Form(""),
     response_format: str = Form("pcm"),
     ref_audio_url: str = Form(""),
     prompt_audio_url: str = Form(""),
     prompt_text: str = Form(""),
+    cfg_value: str = Form("2.0"),
+    inference_timesteps: str = Form("10"),
+    min_len: str = Form("2"),
+    max_len: str = Form("4096"),
+    normalize: bool = Form(False),
+    denoise: bool = Form(False),
+    retry_badcase: bool = Form(True),
+    retry_badcase_max_times: str = Form("3"),
+    retry_badcase_ratio_threshold: str = Form("6.0"),
     extra_json: str = Form(""),
     ref_audio: UploadFile | None = File(None),
     prompt_audio: UploadFile | None = File(None),
@@ -135,6 +147,15 @@ async def speech_stream_form(
         ref_audio_url=ref_audio_url,
         prompt_audio_url=prompt_audio_url,
         prompt_text=prompt_text,
+        cfg_value=cfg_value,
+        inference_timesteps=inference_timesteps,
+        min_len=min_len,
+        max_len=max_len,
+        normalize=normalize,
+        denoise=denoise,
+        retry_badcase=retry_badcase,
+        retry_badcase_max_times=retry_badcase_max_times,
+        retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
         extra_json=extra_json,
         ref_audio=ref_audio,
         prompt_audio=prompt_audio,
@@ -147,12 +168,21 @@ async def speech_file_form(
     input: str = Form(...),
     model: str = Form(DEFAULT_MODEL),
     mode: str = Form("voice_design"),
-    voice: str = Form("default"),
+    voice: str = Form(DEFAULT_VOICE),
     control_instruction: str = Form(""),
     response_format: str = Form("wav"),
     ref_audio_url: str = Form(""),
     prompt_audio_url: str = Form(""),
     prompt_text: str = Form(""),
+    cfg_value: str = Form("2.0"),
+    inference_timesteps: str = Form("10"),
+    min_len: str = Form("2"),
+    max_len: str = Form("4096"),
+    normalize: bool = Form(False),
+    denoise: bool = Form(False),
+    retry_badcase: bool = Form(True),
+    retry_badcase_max_times: str = Form("3"),
+    retry_badcase_ratio_threshold: str = Form("6.0"),
     extra_json: str = Form(""),
     ref_audio: UploadFile | None = File(None),
     prompt_audio: UploadFile | None = File(None),
@@ -168,6 +198,15 @@ async def speech_file_form(
         ref_audio_url=ref_audio_url,
         prompt_audio_url=prompt_audio_url,
         prompt_text=prompt_text,
+        cfg_value=cfg_value,
+        inference_timesteps=inference_timesteps,
+        min_len=min_len,
+        max_len=max_len,
+        normalize=normalize,
+        denoise=denoise,
+        retry_badcase=retry_badcase,
+        retry_badcase_max_times=retry_badcase_max_times,
+        retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
         extra_json=extra_json,
         ref_audio=ref_audio,
         prompt_audio=prompt_audio,
@@ -187,6 +226,15 @@ async def _build_payload_from_form(
     ref_audio_url: str,
     prompt_audio_url: str,
     prompt_text: str,
+    cfg_value: str,
+    inference_timesteps: str,
+    min_len: str,
+    max_len: str,
+    normalize: bool,
+    denoise: bool,
+    retry_badcase: bool,
+    retry_badcase_max_times: str,
+    retry_badcase_ratio_threshold: str,
     extra_json: str,
     ref_audio: UploadFile | None,
     prompt_audio: UploadFile | None,
@@ -202,10 +250,12 @@ async def _build_payload_from_form(
     payload: dict[str, Any] = {
         "model": model.strip() or DEFAULT_MODEL,
         "input": final_text,
-        "voice": voice.strip() or "default",
         "response_format": response_format.strip() or ("pcm" if stream else "wav"),
         "stream": stream,
     }
+    normalized_voice = _normalized_voice(voice)
+    if normalized_voice:
+        payload["voice"] = normalized_voice
 
     ref_audio_value = ref_audio_url.strip()
     if not ref_audio_value and ref_audio is not None and ref_audio.filename:
@@ -224,6 +274,20 @@ async def _build_payload_from_form(
         if prompt_text.strip():
             payload["prompt_text"] = prompt_text.strip()
 
+    payload.update(
+        _build_inference_params(
+            cfg_value=cfg_value,
+            inference_timesteps=inference_timesteps,
+            min_len=min_len,
+            max_len=max_len,
+            normalize=normalize,
+            denoise=denoise,
+            retry_badcase=retry_badcase,
+            retry_badcase_max_times=retry_badcase_max_times,
+            retry_badcase_ratio_threshold=retry_badcase_ratio_threshold,
+        )
+    )
+
     if extra_json.strip():
         try:
             extra = json.loads(extra_json)
@@ -236,6 +300,86 @@ async def _build_payload_from_form(
         payload.setdefault("response_format", response_format)
 
     return payload
+
+
+def _build_inference_params(
+    *,
+    cfg_value: str,
+    inference_timesteps: str,
+    min_len: str,
+    max_len: str,
+    normalize: bool,
+    denoise: bool,
+    retry_badcase: bool,
+    retry_badcase_max_times: str,
+    retry_badcase_ratio_threshold: str,
+) -> dict[str, Any]:
+    parsed_min_len = _parse_int(min_len, "min_len", minimum=0, maximum=8192)
+    parsed_max_len = _parse_int(max_len, "max_len", minimum=1, maximum=8192)
+    if parsed_min_len > parsed_max_len:
+        raise HTTPException(status_code=400, detail="min_len must be less than or equal to max_len")
+
+    return {
+        "cfg_value": _parse_float(cfg_value, "cfg_value", minimum=0.1, maximum=10.0),
+        "inference_timesteps": _parse_int(
+            inference_timesteps, "inference_timesteps", minimum=1, maximum=100
+        ),
+        "min_len": parsed_min_len,
+        "max_len": parsed_max_len,
+        "normalize": normalize,
+        "denoise": denoise,
+        "retry_badcase": retry_badcase,
+        "retry_badcase_max_times": _parse_int(
+            retry_badcase_max_times, "retry_badcase_max_times", minimum=0, maximum=20
+        ),
+        "retry_badcase_ratio_threshold": _parse_float(
+            retry_badcase_ratio_threshold,
+            "retry_badcase_ratio_threshold",
+            minimum=0.1,
+            maximum=100.0,
+        ),
+    }
+
+
+def _parse_float(value: str, field_name: str, *, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a number") from exc
+    if parsed < minimum or parsed > maximum:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be between {minimum:g} and {maximum:g}",
+        )
+    return parsed
+
+
+def _parse_int(value: str, field_name: str, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer") from exc
+    if parsed < minimum or parsed > maximum:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be between {minimum} and {maximum}",
+        )
+    return parsed
+
+
+def _normalized_voice(voice: str | None) -> str:
+    normalized = (voice or DEFAULT_VOICE).strip()
+    if normalized.lower() in {"", "default", "none"}:
+        return ""
+    return normalized
+
+
+def _normalize_voice(payload: dict[str, Any]) -> None:
+    voice = _normalized_voice(str(payload.get("voice") or ""))
+    if voice:
+        payload["voice"] = voice
+    else:
+        payload.pop("voice", None)
 
 
 async def _upload_to_data_uri(upload: UploadFile) -> str:
@@ -304,4 +448,3 @@ def _media_type_for_format(response_format: str) -> str:
     if normalized == "flac":
         return "audio/flac"
     return "audio/wav"
-

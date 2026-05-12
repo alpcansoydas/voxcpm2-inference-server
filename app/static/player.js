@@ -49,9 +49,10 @@ registerProcessor("voxcpm2-playback-processor", VoxCPM2PlaybackProcessor);
 `;
 
 const form = document.getElementById("speechForm");
-const modeSelect = document.getElementById("modeSelect");
-const ultimateFields = document.getElementById("ultimateFields");
-const formatSelect = document.getElementById("formatSelect");
+const modeInput = document.getElementById("modeInput");
+const modeTabs = Array.from(document.querySelectorAll(".mode-tab"));
+const modePanels = Array.from(document.querySelectorAll(".mode-panel"));
+const formatInput = document.getElementById("formatInput");
 const deliverySelect = document.getElementById("deliverySelect");
 const stopBtn = document.getElementById("stopBtn");
 const generateBtn = document.getElementById("generateBtn");
@@ -61,9 +62,14 @@ const downloadLink = document.getElementById("downloadLink");
 
 let audioContext;
 let playbackNode;
+let fallbackQueue = [];
+let fallbackCurrent;
+let fallbackOffset = 0;
+let fallbackPlaying = false;
 let abortController;
 let objectUrl;
 let stats = resetStats();
+let streamedChunks = [];
 
 function resetStats() {
   return {
@@ -73,6 +79,11 @@ function resetStats() {
     chunks: 0,
     samples: 0,
   };
+}
+
+function formatMs(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return "-";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${Math.round(ms)}ms`;
 }
 
 function log(message) {
@@ -86,20 +97,31 @@ function setPlaybackState(text, color = "#a6adb1") {
 }
 
 function renderStats(final = false) {
+  if (!stats.startedAt) return;
   const elapsedMs = final && stats.streamEndedAt
     ? stats.streamEndedAt - stats.startedAt
     : performance.now() - stats.startedAt;
   const audioSeconds = stats.samples / SAMPLE_RATE;
   document.getElementById("chunks").textContent = String(stats.chunks);
   document.getElementById("duration").textContent = `${audioSeconds.toFixed(1)}s`;
-  document.getElementById("ttfp").textContent = stats.firstChunkAt
-    ? `${Math.round(stats.firstChunkAt - stats.startedAt)}ms`
+  document.getElementById("ttfb").textContent = stats.firstChunkAt
+    ? formatMs(stats.firstChunkAt - stats.startedAt)
     : "-";
+  document.getElementById("totalLatency").textContent = final ? formatMs(elapsedMs) : "-";
   if (audioSeconds > 0 && elapsedMs > 0) {
     const rtf = elapsedMs / 1000 / audioSeconds;
     document.getElementById("rtf").textContent = `${rtf.toFixed(2)}x`;
     document.getElementById("progressBar").style.width = `${Math.min((1 / rtf) * 50, 100)}%`;
   }
+}
+
+function resetMetricDisplay() {
+  document.getElementById("chunks").textContent = "0";
+  document.getElementById("duration").textContent = "0.0s";
+  document.getElementById("ttfb").textContent = "-";
+  document.getElementById("totalLatency").textContent = "-";
+  document.getElementById("rtf").textContent = "-";
+  document.getElementById("progressBar").style.width = "0%";
 }
 
 async function ensureAudio() {
@@ -109,28 +131,123 @@ async function ensureAudio() {
   }
 
   audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
-  const blob = new Blob([workletSource], { type: "application/javascript" });
-  const url = URL.createObjectURL(blob);
-  await audioContext.audioWorklet.addModule(url);
-  URL.revokeObjectURL(url);
+  if (
+    audioContext.audioWorklet &&
+    typeof audioContext.audioWorklet.addModule === "function" &&
+    typeof AudioWorkletNode !== "undefined"
+  ) {
+    const blob = new Blob([workletSource], { type: "application/javascript" });
+    const url = URL.createObjectURL(blob);
+    try {
+      await audioContext.audioWorklet.addModule(url);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
 
-  playbackNode = new AudioWorkletNode(audioContext, "voxcpm2-playback-processor");
-  playbackNode.connect(audioContext.destination);
-  playbackNode.port.onmessage = (event) => {
-    if (event.data.type === "playing") setPlaybackState("Playing", "#0b7f7a");
-    if (event.data.type === "drained" && !abortController) setPlaybackState("Done", "#0b7f7a");
+    playbackNode = new AudioWorkletNode(audioContext, "voxcpm2-playback-processor");
+    playbackNode.connect(audioContext.destination);
+    playbackNode.port.onmessage = (event) => {
+      if (event.data.type === "playing") setPlaybackState("Playing", "#0b7f7a");
+      if (event.data.type === "drained" && !abortController) setPlaybackState("Done", "#0b7f7a");
+    };
+    return;
+  }
+
+  playbackNode = audioContext.createScriptProcessor(4096, 0, 1);
+  playbackNode.onaudioprocess = (event) => {
+    const out = event.outputBuffer.getChannelData(0);
+    for (let i = 0; i < out.length; i += 1) {
+      if (!fallbackCurrent || fallbackOffset >= fallbackCurrent.length) {
+        if (fallbackQueue.length === 0) {
+          out.fill(0, i);
+          if (fallbackPlaying) {
+            fallbackPlaying = false;
+            if (!abortController) setPlaybackState("Done", "#0b7f7a");
+          }
+          return;
+        }
+        fallbackCurrent = fallbackQueue.shift();
+        fallbackOffset = 0;
+      }
+      out[i] = fallbackCurrent[fallbackOffset] / 32768;
+      fallbackOffset += 1;
+    }
+    if (!fallbackPlaying) {
+      fallbackPlaying = true;
+      setPlaybackState("Playing", "#0b7f7a");
+    }
   };
+  playbackNode.connect(audioContext.destination);
 }
 
 function clearPlayback() {
-  if (playbackNode) playbackNode.port.postMessage({ type: "clear" });
+  if (playbackNode && playbackNode.port) playbackNode.port.postMessage({ type: "clear" });
+  fallbackQueue = [];
+  fallbackCurrent = undefined;
+  fallbackOffset = 0;
+  fallbackPlaying = false;
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = undefined;
   fileAudio.hidden = true;
   fileAudio.removeAttribute("src");
   downloadLink.hidden = true;
   downloadLink.removeAttribute("href");
-  document.getElementById("progressBar").style.width = "0%";
+  resetMetricDisplay();
+}
+
+function enqueuePcm(pcm) {
+  if (playbackNode.port) {
+    playbackNode.port.postMessage(pcm);
+  } else {
+    fallbackQueue.push(pcm);
+  }
+}
+
+function wavBlobFromPcmChunks(chunks) {
+  const dataLength = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+  let offset = 0;
+
+  function writeString(value) {
+    for (let i = 0; i < value.length; i += 1) {
+      view.setUint8(offset, value.charCodeAt(i));
+      offset += 1;
+    }
+  }
+
+  writeString("RIFF");
+  view.setUint32(offset, 36 + dataLength, true); offset += 4;
+  writeString("WAVE");
+  writeString("fmt ");
+  view.setUint32(offset, 16, true); offset += 4;
+  view.setUint16(offset, 1, true); offset += 2;
+  view.setUint16(offset, 1, true); offset += 2;
+  view.setUint32(offset, SAMPLE_RATE, true); offset += 4;
+  view.setUint32(offset, SAMPLE_RATE * 2, true); offset += 4;
+  view.setUint16(offset, 2, true); offset += 2;
+  view.setUint16(offset, 16, true); offset += 2;
+  writeString("data");
+  view.setUint32(offset, dataLength, true); offset += 4;
+
+  const bytes = new Uint8Array(buffer, 44);
+  let writeOffset = 0;
+  chunks.forEach((chunk) => {
+    bytes.set(chunk, writeOffset);
+    writeOffset += chunk.byteLength;
+  });
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function showDownload(blob, filename) {
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(blob);
+  fileAudio.src = objectUrl;
+  fileAudio.hidden = false;
+  downloadLink.href = objectUrl;
+  downloadLink.download = filename;
+  downloadLink.hidden = false;
 }
 
 async function playStreaming(formData) {
@@ -138,6 +255,7 @@ async function playStreaming(formData) {
   clearPlayback();
   abortController = new AbortController();
   stats = resetStats();
+  streamedChunks = [];
   stats.startedAt = performance.now();
   generateBtn.disabled = true;
   setPlaybackState("Connecting", "#b25e09");
@@ -172,7 +290,8 @@ async function playStreaming(formData) {
     const pcmBuffer = new ArrayBuffer(usableLength);
     new Uint8Array(pcmBuffer).set(raw.subarray(0, usableLength));
     const pcm = new Int16Array(pcmBuffer);
-    playbackNode.port.postMessage(pcm);
+    streamedChunks.push(new Uint8Array(pcmBuffer.slice(0)));
+    enqueuePcm(pcm);
 
     stats.chunks += 1;
     stats.samples += pcm.length;
@@ -184,10 +303,13 @@ async function playStreaming(formData) {
   }
 
   stats.streamEndedAt = performance.now();
+  if (streamedChunks.length > 0) {
+    showDownload(wavBlobFromPcmChunks(streamedChunks), "voxcpm2-stream.wav");
+  }
   abortController = undefined;
   setPlaybackState("Finishing playback", "#0b7f7a");
   renderStats(true);
-  log("Stream completed.");
+  log("Stream completed. Final WAV is ready to download.");
 }
 
 async function playFile(formData) {
@@ -205,28 +327,47 @@ async function playFile(formData) {
     signal: abortController.signal,
   });
   if (!response.ok) throw new Error(await response.text());
+  stats.firstChunkAt = performance.now();
 
   const blob = await response.blob();
-  objectUrl = URL.createObjectURL(blob);
-  fileAudio.src = objectUrl;
-  fileAudio.hidden = false;
-  downloadLink.href = objectUrl;
-  downloadLink.hidden = false;
-  await fileAudio.play();
+  stats.streamEndedAt = performance.now();
+  showDownload(blob, "voxcpm2-output.wav");
+  fileAudio.play().catch(() => {});
   abortController = undefined;
   setPlaybackState("Playing file", "#0b7f7a");
+  renderStats(true);
   log("Audio file received.");
+}
+
+function forceActiveFields(formData) {
+  const activePanel = document.querySelector(".mode-panel.active");
+  if (!activePanel) return;
+
+  const targetText = activePanel.querySelector("textarea[name='input']");
+  if (targetText) formData.set("input", targetText.value);
+
+  const control = activePanel.querySelector("[name='control_instruction']");
+  formData.delete("control_instruction");
+  if (control && !control.disabled) formData.set("control_instruction", control.value);
+
+  ["ref_audio", "ref_audio_url", "prompt_audio", "prompt_audio_url", "prompt_text"].forEach((name) => {
+    formData.delete(name);
+    const field = activePanel.querySelector(`[name='${name}']`);
+    if (field && !field.disabled) {
+      const value = field.type === "file" ? field.files[0] : field.value;
+      if (value) formData.set(name, value);
+    }
+  });
 }
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = new FormData(form);
+  forceActiveFields(formData);
   const shouldStream = deliverySelect.value === "stream";
-  if (shouldStream && formatSelect.value !== "pcm") {
-    formData.set("response_format", "pcm");
-    formatSelect.value = "pcm";
-    log("Streaming playback uses PCM, so the response format was set to PCM.");
-  }
+  const responseFormat = shouldStream ? "pcm" : "wav";
+  formatInput.value = responseFormat;
+  formData.set("response_format", responseFormat);
 
   try {
     if (shouldStream) await playStreaming(formData);
@@ -234,7 +375,11 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     if (error.name !== "AbortError") {
       setPlaybackState("Error", "#b42318");
-      log(error.message || String(error));
+      if (error instanceof TypeError && error.message === "Failed to fetch") {
+        log("Request failed before the gateway responded. Check that the FastAPI server is still running and refresh the page.");
+      } else {
+        log(error.message || String(error));
+      }
     }
   } finally {
     generateBtn.disabled = false;
@@ -246,21 +391,41 @@ stopBtn.addEventListener("click", () => {
     abortController.abort();
     abortController = undefined;
   }
-  if (playbackNode) playbackNode.port.postMessage({ type: "clear" });
+  if (playbackNode && playbackNode.port) playbackNode.port.postMessage({ type: "clear" });
+  fallbackQueue = [];
+  fallbackCurrent = undefined;
+  fallbackOffset = 0;
+  fallbackPlaying = false;
   setPlaybackState("Stopped", "#667075");
   log("Playback stopped.");
 });
 
-modeSelect.addEventListener("change", () => {
-  ultimateFields.hidden = modeSelect.value !== "ultimate_cloning";
-});
+function setMode(mode) {
+  modeInput.value = mode;
+  modeTabs.forEach((tab) => {
+    const active = tab.dataset.mode === mode;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-pressed", String(active));
+  });
+  modePanels.forEach((panel) => {
+    const active = panel.dataset.modePanel === mode;
+    panel.hidden = !active;
+    panel.setAttribute("aria-hidden", String(!active));
+    panel.classList.toggle("active", active);
+    panel.querySelectorAll("input, textarea, select").forEach((field) => {
+      field.disabled = !active;
+    });
+  });
+  clearPlayback();
+  setPlaybackState("Ready", "#a6adb1");
+}
 
 deliverySelect.addEventListener("change", () => {
-  if (deliverySelect.value === "stream") {
-    formatSelect.value = "pcm";
-  } else if (formatSelect.value === "pcm") {
-    formatSelect.value = "wav";
-  }
+  formatInput.value = deliverySelect.value === "stream" ? "pcm" : "wav";
+});
+
+modeTabs.forEach((tab) => {
+  tab.addEventListener("click", () => setMode(tab.dataset.mode));
 });
 
 async function loadConfig() {
@@ -268,6 +433,7 @@ async function loadConfig() {
     const response = await fetch("/api/config");
     const config = await response.json();
     document.getElementById("modelInput").value = config.default_model;
+    document.getElementById("voiceInput").value = config.default_voice || "";
     document.getElementById("serverStatus").textContent = config.vllm_base_url;
   } catch {
     document.getElementById("serverStatus").textContent = "Gateway config unavailable";
@@ -284,4 +450,5 @@ async function loadConfig() {
   }
 }
 
+setMode(modeInput.value);
 loadConfig();
