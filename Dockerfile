@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
+FROM python:3.10-slim-bookworm
 
 ARG VLLM_OMNI_REF=v0.20.0
 ARG VLLM_CU129_WHEEL=https://github.com/vllm-project/vllm/releases/download/v0.20.0/vllm-0.20.0%2Bcu129-cp38-abi3-manylinux_2_31_x86_64.whl
@@ -21,9 +21,6 @@ RUN apt-get update \
        ca-certificates \
        git \
        libsndfile1 \
-       python3 \
-       python3-pip \
-       python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
