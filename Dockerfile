@@ -1,6 +1,7 @@
-FROM vllm/vllm-openai:v0.20.0
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu22.04
 
 ARG VLLM_OMNI_REF=v0.20.0
+ARG VLLM_CU129_WHEEL=https://github.com/vllm-project/vllm/releases/download/v0.20.0/vllm-0.20.0%2Bcu129-cp38-abi3-manylinux_2_31_x86_64.whl
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,16 +17,25 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git libsndfile1 \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates \
+       git \
+       libsndfile1 \
+       python3 \
+       python3-pip \
+       python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
 COPY VoxCPM-main ./VoxCPM-main
 
 RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install \
+       "${VLLM_CU129_WHEEL}" \
+       --extra-index-url https://download.pytorch.org/whl/cu129 \
     && python3 -m pip install -r requirements.txt \
     && python3 -m pip install "setuptools_scm" \
-    && python3 -m pip install "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_REF}" \
+    && python3 -m pip install --no-deps "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_REF}" \
     && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VOXCPM=2.0.0 \
        python3 -m pip install -e ./VoxCPM-main
 
