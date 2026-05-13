@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VLLM_OMNI_BASE_URL=http://127.0.0.1:8000 \
     VLLM_OMNI_VOXCPM_CODE_PATH=/app/VoxCPM-main/src \
     APP_HOST=0.0.0.0 \
-    APP_PORT=8080
+    APP_PORT=8081
 
 WORKDIR /app
 
@@ -33,9 +33,11 @@ COPY app ./app
 COPY voice_presets ./voice_presets
 COPY README.md ./
 
-EXPOSE 8000 8080
+EXPOSE 8000 8081
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD python3 -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"APP_PORT\", \"8080\")}/api/health', timeout=5).read()"
+    CMD python3 -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"APP_PORT\", \"8081\")}/api/health', timeout=5).read()"
+
+ENTRYPOINT []
 
 CMD ["bash", "-lc", "set -euo pipefail\nvllm-omni serve \"${VOXCPM2_MODEL}\" --omni --host \"${VLLM_OMNI_HOST}\" --port \"${VLLM_OMNI_PORT}\" ${VLLM_OMNI_ARGS:-} &\nvllm_pid=$!\npython3 -m uvicorn app.main:app --host \"${APP_HOST}\" --port \"${APP_PORT}\" &\napp_pid=$!\ntrap 'kill ${vllm_pid} ${app_pid} 2>/dev/null || true; wait' TERM INT\nwait -n ${vllm_pid} ${app_pid}\nstatus=$?\nkill ${vllm_pid} ${app_pid} 2>/dev/null || true\nwait || true\nexit ${status}"]
