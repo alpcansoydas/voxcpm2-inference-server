@@ -161,7 +161,7 @@ Run it with NVIDIA GPU access:
 
 ```bash
 docker run --rm --gpus all \
-  -p 8000:8000 -p 8081:8081 \
+  -p 8080:8000 -p 8081:8081 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   voxcpm2-inference-server
 ```
@@ -173,12 +173,13 @@ http://localhost:8081
 ```
 
 The image defaults to `openbmb/VoxCPM2`, serves vLLM-Omni on port `8000`, and
-serves the gateway on port `8081`. Override startup settings with environment
-variables when needed:
+serves the gateway on port `8081`. The run command maps vLLM-Omni to host port
+`8080` and the browser gateway to host port `8081`. Override startup settings
+with environment variables when needed:
 
 ```bash
 docker run --rm --gpus all \
-  -p 8000:8000 -p 8081:8081 \
+  -p 8080:8000 -p 8081:8081 \
   -e VOXCPM2_MODEL=openbmb/VoxCPM2 \
   -e VLLM_OMNI_ARGS="--gpu-memory-utilization 0.90" \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
