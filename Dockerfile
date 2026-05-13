@@ -1,20 +1,42 @@
-FROM python:3.11-slim
+FROM vllm/vllm-openai:v0.20.0
+
+ARG VLLM_OMNI_REF=v0.20.0
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    VLLM_OMNI_BASE_URL=http://host.docker.internal:8000 \
+    PIP_NO_CACHE_DIR=1 \
     VOXCPM2_MODEL=openbmb/VoxCPM2 \
-    VLLM_OMNI_API_KEY=EMPTY
+    VLLM_OMNI_HOST=0.0.0.0 \
+    VLLM_OMNI_PORT=8000 \
+    VLLM_OMNI_BASE_URL=http://127.0.0.1:8000 \
+    VLLM_OMNI_API_KEY=EMPTY \
+    VLLM_OMNI_VOXCPM_CODE_PATH=/app/VoxCPM-main/src \
+    APP_HOST=0.0.0.0 \
+    APP_PORT=8080
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+COPY VoxCPM-main ./VoxCPM-main
+
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements.txt \
+    && python -m pip install "setuptools_scm" \
+    && python -m pip install "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_REF}" \
+    && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VOXCPM=2.0.0 \
+       python -m pip install -e ./VoxCPM-main
 
 COPY app ./app
-COPY README.md .
+COPY voice_presets ./voice_presets
+COPY README.md ./
 
-EXPOSE 8080
+EXPOSE 8000 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"APP_PORT\", \"8080\")}/api/health', timeout=5).read()"
 
+CMD ["bash", "-lc", "set -euo pipefail\nvllm-omni serve \"${VOXCPM2_MODEL}\" --omni --host \"${VLLM_OMNI_HOST}\" --port \"${VLLM_OMNI_PORT}\" ${VLLM_OMNI_ARGS:-} &\nvllm_pid=$!\npython -m uvicorn app.main:app --host \"${APP_HOST}\" --port \"${APP_PORT}\" &\napp_pid=$!\ntrap 'kill ${vllm_pid} ${app_pid} 2>/dev/null || true; wait' TERM INT\nwait -n ${vllm_pid} ${app_pid}\nstatus=$?\nkill ${vllm_pid} ${app_pid} 2>/dev/null || true\nwait || true\nexit ${status}"]

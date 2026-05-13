@@ -151,22 +151,39 @@ proxies to the running vLLM-Omni server configured by `VLLM_OMNI_BASE_URL`.
 
 ## Docker
 
-Build a lightweight gateway image:
+Build a GPU image that starts both vLLM-Omni and the FastAPI gateway:
 
 ```bash
-docker build -t voxcpm2-gateway .
+docker build -t voxcpm2-inference-server .
 ```
 
-Run it against a vLLM-Omni server reachable from the container:
+Run it with NVIDIA GPU access:
 
 ```bash
-docker run --rm -p 8080:8080 \
-  -e VLLM_OMNI_BASE_URL=http://host.docker.internal:8000 \
-  voxcpm2-gateway
+docker run --rm --gpus all \
+  -p 8000:8000 -p 8080:8080 \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  voxcpm2-inference-server
 ```
 
-On Linux, replace `host.docker.internal` with the host IP or run with an
-appropriate Docker network.
+Open the demo at:
+
+```text
+http://localhost:8080
+```
+
+The image defaults to `openbmb/VoxCPM2`, serves vLLM-Omni on port `8000`, and
+serves the gateway on port `8080`. Override startup settings with environment
+variables when needed:
+
+```bash
+docker run --rm --gpus all \
+  -p 8000:8000 -p 8080:8080 \
+  -e VOXCPM2_MODEL=openbmb/VoxCPM2 \
+  -e VLLM_OMNI_ARGS="--gpu-memory-utilization 0.90" \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  voxcpm2-inference-server
+```
 
 ## API
 

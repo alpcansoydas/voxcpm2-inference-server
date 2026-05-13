@@ -1,0 +1,13 @@
+.git
+.venv
+.venv-vllm
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.DS_Store
+dist
+build
+*.egg-info
+docker/__pycache__
