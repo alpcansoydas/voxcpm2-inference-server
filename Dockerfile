@@ -30,9 +30,8 @@ RUN python3 -m pip install --upgrade pip \
     && python3 -m pip install \
        "${VLLM_CU129_WHEEL}" \
        --extra-index-url https://download.pytorch.org/whl/cu129 \
-    && python3 -m pip install -r requirements.txt \
     && python3 -m pip install "setuptools_scm" \
-    && python3 -m pip install --no-deps "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_REF}" \
+    && python3 -m pip install "vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@${VLLM_OMNI_REF}" \
     && SETUPTOOLS_SCM_PRETEND_VERSION_FOR_VOXCPM=2.0.0 \
        python3 -m pip install -e ./VoxCPM-main
 
