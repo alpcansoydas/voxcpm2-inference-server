@@ -11,5 +11,5 @@ vllm==0.20.0
 # vLLM-Omni 0.20.0 is needed for VoxCPM2 native AR serving. It is installed
 # from the matching release tag because the PyPI stable wheel may lag the
 # latest supported models.
-setuptools_scm
-vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@v0.20.0
+setuptools_scm==8.3.1
+vllm-omni @ git+https://github.com/vllm-project/vllm-omni.git@4a24a517abc7769b1399ded594558a3fe8269872
